@@ -8,11 +8,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Decompresser le projet
-        run: unzip -q projet.zip -d projet
+        run: |
+          echo "Contenu du depot :"
+          find . -not -path './.git/*' -type f | head -50
+          Z=$(find . -iname '*.zip' -not -path './.git/*' | head -n 1)
+          if [ -z "$Z" ]; then
+            echo "ERREUR : aucun fichier .zip dans le depot. Envoie projet.zip avec Add file > Upload files."
+            exit 1
+          fi
+          echo "Zip trouve : $Z"
+          unzip -q "$Z" -d projet
+          S=$(find projet -name settings.gradle.kts | head -n 1)
+          if [ -z "$S" ]; then
+            echo "ERREUR : settings.gradle.kts introuvable dans le zip. Le zip n'est pas le bon."
+            exit 1
+          fi
+          echo "PROJECT_DIR=$(dirname "$S")" >> "$GITHUB_ENV"
       - name: Cle de signature stable
         run: |
           mkdir -p ~/.android
-          base64 -d projet/debug.keystore.b64 > ~/.android/debug.keystore
+          base64 -d "$PROJECT_DIR/debug.keystore.b64" > ~/.android/debug.keystore
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -22,9 +37,9 @@ jobs:
         with:
           gradle-version: 8.7
       - name: Construire l'APK
-        working-directory: projet
+        working-directory: ${{ env.PROJECT_DIR }}
         run: gradle assembleDebug
       - uses: actions/upload-artifact@v4
         with:
           name: GardeDNS-apk
-          path: projet/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
