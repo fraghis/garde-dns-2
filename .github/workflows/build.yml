@@ -7,27 +7,73 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Decompresser le projet
+      - name: Reconstruire le projet
         run: |
-          echo "Contenu du depot :"
-          find . -not -path './.git/*' -type f | head -50
-          Z=$(find . -iname '*.zip' -not -path './.git/*' | head -n 1)
-          if [ -z "$Z" ]; then
-            echo "ERREUR : aucun fichier .zip dans le depot. Envoie projet.zip avec Add file > Upload files."
-            exit 1
-          fi
-          echo "Zip trouve : $Z"
-          unzip -q "$Z" -d projet
-          S=$(find projet -name settings.gradle.kts | head -n 1)
-          if [ -z "$S" ]; then
-            echo "ERREUR : settings.gradle.kts introuvable dans le zip. Le zip n'est pas le bon."
-            exit 1
-          fi
-          echo "PROJECT_DIR=$(dirname "$S")" >> "$GITHUB_ENV"
+          echo "Fichiers du depot :"
+          find . -not -path './.git/*' -type f | sort
+          f() { find . -name "$1" -not -path './.git/*' -not -path './projet/*' | head -n 1; }
+          need() { x=$(f "$1"); if [ -z "$x" ]; then echo "ERREUR : fichier $1 introuvable dans le depot."; exit 1; fi; echo "$x"; }
+          mkdir -p projet/app/src/main/java/cg/garde/dns projet/app/src/main/res/xml projet/app/src/main/res/values
+          for k in MainActivity Guard GuardService WatchdogService BootReceiver GardeAdmin; do
+            cp "$(need $k.kt)" projet/app/src/main/java/cg/garde/dns/$k.kt
+          done
+          cp "$(need accessibility_config.xml)" projet/app/src/main/res/xml/accessibility_config.xml
+          cp "$(need device_admin.xml)" projet/app/src/main/res/xml/device_admin.xml
+          cp "$(need strings.xml)" projet/app/src/main/res/values/strings.xml
+          cp "$(need AndroidManifest.xml)" projet/app/src/main/AndroidManifest.xml
+          cp "$(need debug.keystore.b64)" projet/debug.keystore.b64
+          grep -q eventHit projet/app/src/main/java/cg/garde/dns/Guard.kt || { echo "ERREUR : Guard.kt est l'ancienne version (il manque eventHit)."; exit 1; }
+          grep -q inSettings projet/app/src/main/java/cg/garde/dns/GuardService.kt || { echo "ERREUR : GuardService.kt est l'ancienne version."; exit 1; }
+          cat > projet/settings.gradle.kts << 'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "GardeDNS"
+          include(":app")
+          EOF
+          cat > projet/build.gradle.kts << 'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+          cat > projet/app/build.gradle.kts << 'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "cg.garde.dns"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "cg.garde.dns"
+                  minSdk = 26
+                  targetSdk = 33
+                  versionCode = 4
+                  versionName = "3.1"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          EOF
+          cat > projet/gradle.properties << 'EOF'
+          org.gradle.jvmargs=-Xmx2048m
+          android.useAndroidX=true
+          kotlin.code.style=official
+          EOF
+          echo "Projet reconstruit :"
+          find projet -type f | sort
       - name: Cle de signature stable
         run: |
           mkdir -p ~/.android
-          base64 -d "$PROJECT_DIR/debug.keystore.b64" > ~/.android/debug.keystore
+          base64 -d projet/debug.keystore.b64 > ~/.android/debug.keystore
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -37,9 +83,9 @@ jobs:
         with:
           gradle-version: 8.7
       - name: Construire l'APK
-        working-directory: ${{ env.PROJECT_DIR }}
+        working-directory: projet
         run: gradle assembleDebug
       - uses: actions/upload-artifact@v4
         with:
           name: GardeDNS-apk
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          path: projet/app/build/outputs/apk/debug/app-debug.apk
